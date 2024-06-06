@@ -1,7 +1,7 @@
 import mlflow
 
-experiment_name = "exp_projeto_ciclo_2_V3"
-entry_point = "MlFlow3.py"
+experiment_name = "exp_teste_modelos_de_boost"
+entry_point = "Boosts.py"
 
 mlflow.projects.run(
     uri=".",

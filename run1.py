@@ -1,6 +1,6 @@
 import mlflow
 
-experiment_name = "Crop_Recommendation_Experiment"
+experiment_name = "exp_projeto_ciclo_2_V1"
 entry_point = "MlFlow1.py"
 
 mlflow.projects.run(

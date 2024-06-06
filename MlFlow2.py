@@ -28,33 +28,23 @@ X = DS.iloc[:, :-1]  # extrai as características (todas as colunas exceto a úl
 
 X_train, X_test, y_train, y_test = cross_validation(ds_path, folds)
 
-# Inicializa listas para armazenar os resultados de cada fold
+# Inicializa listas para armazenar os resultados de cada fold para seleções dinâmicas
 resultKNU = []
 resultKNE = []
 resultLCA = []
 resultOLA = []
 resultMCB = []
 
-# Inicializa listas para armazenar as métricas de cada classificador
-accuracies_knn = []
-precisions_knn = []
-recalls_knn = []
-f1_scores_knn = []
-roc_aucs_knn = []
+# Inicializa dicionários para armazenar as métricas de cada classificador
+metrics_knn = {"accuracy": [], "precision": [], "recall": [], "f1_score": [], "roc_auc": []}
+metrics_svc = {"accuracy": [], "precision": [], "recall": [], "f1_score": [], "roc_auc": []}
+metrics_rf = {"accuracy": [], "precision": [], "recall": [], "f1_score": [], "roc_auc": []}
 
-accuracies_svc = []
-precisions_svc = []
-recalls_svc = []
-f1_scores_svc = []
-roc_aucs_svc = []
+# Criar o experimento
+mlflow.create_experiment("exp_projeto_ciclo_2_V2")
 
-accuracies_rf = []
-precisions_rf = []
-recalls_rf = []
-f1_scores_rf = []
-roc_aucs_rf = []
-
-mlflow.set_experiment("Crop_Recommendation_Experiment")
+# Definir o experimento atual
+mlflow.set_experiment("exp_projeto_ciclo_2_V2")
 
 for i in range(folds):
     # Divisão de treino e validação
@@ -62,9 +52,9 @@ for i in range(folds):
 
     with mlflow.start_run(run_name=f"Fold_{i + 1}"):
         # Criação e treinamento dos modelos KNN e RandomForest com Bagging e do SVM com AdaBoost
-        knn = BaggingClassifier(estimator=KNeighborsClassifier(n_neighbors=5), n_estimators=50)
-        svc = AdaBoostClassifier(estimator=SVC(kernel='linear', probability=True, C=1, gamma='auto'), n_estimators=50, learning_rate=1, algorithm='SAMME')
-        rf = BaggingClassifier(estimator=RandomForestClassifier(n_estimators=100), n_estimators=50)
+        knn = BaggingClassifier(estimator=KNeighborsClassifier(n_neighbors=10, weights='distance'), n_estimators=100, max_samples=0.7, max_features=0.7)
+        svc = AdaBoostClassifier(estimator=SVC(kernel='rbf', probability=True, C=1.0, gamma='scale'), n_estimators=100,learning_rate=0.5, algorithm='SAMME')
+        rf = BaggingClassifier(estimator=RandomForestClassifier(n_estimators=50, max_depth=20), n_estimators=100,max_samples=0.8, max_features=0.8)
 
         # Treinamento dos classificadores
         knn.fit(X_treino, y_treino)
@@ -97,87 +87,93 @@ for i in range(folds):
         mcb.fit(X_treino, y_treino)
         resultMCB.append(mcb.score(X_validacao, y_validacao))
 
-        # Avaliação das métricas para cada classificador individualmente
+        # Função para avaliar e logar as métricas
+        def evaluate_and_log(model, X_validacao, y_validacao, metrics_dict, model_name):
+            result = model.predict(X_validacao)
+            acc = accuracy_score(y_validacao, result)
+            metrics_dict["accuracy"].append(acc)
 
-        # KNN
-        result_knn = knn.predict(X_validacao)
-        acc_knn = accuracy_score(y_validacao, result_knn)
-        accuracies_knn.append(acc_knn)
-        report_knn = classification_report(y_validacao, result_knn, output_dict=True, zero_division=0)
+            report = classification_report(y_validacao, result, output_dict=True, zero_division=0)
 
-        precision_values_knn = [report_knn[str(label)]['precision'] for label in np.unique(y) if str(label) in report_knn]
-        precisions_knn.append(np.mean(np.array(precision_values_knn)))
-        recall_values_knn = [report_knn[str(label)]['recall'] for label in np.unique(y) if str(label) in report_knn]
-        recalls_knn.append(np.mean(np.array(recall_values_knn)))
-        f1_score_values_knn = [report_knn[str(label)]['f1-score'] for label in np.unique(y) if str(label) in report_knn]
-        f1_scores_knn.append(np.mean(np.array(f1_score_values_knn)))
-        y_validacao_bin_knn = label_binarize(y_validacao, classes=np.unique(y))
-        result_bin_knn = label_binarize(result_knn, classes=np.unique(y))
-        if y_validacao_bin_knn.shape == result_bin_knn.shape:
-            roc_auc_knn = roc_auc_score(y_validacao_bin_knn, result_bin_knn, average="macro")
-            roc_aucs_knn.append(roc_auc_knn)
+            precision_values = [report[str(label)]['precision'] for label in np.unique(y) if str(label) in report]
+            recall_values = [report[str(label)]['recall'] for label in np.unique(y) if str(label) in report]
+            f1_score_values = [report[str(label)]['f1-score'] for label in np.unique(y) if str(label) in report]
+            y_validacao_bin = label_binarize(y_validacao, classes=np.unique(y))
+            result_bin = label_binarize(result, classes=np.unique(y))
 
-        # Log metrics for KNN
-        mlflow.log_metric("KNN Accuracy", acc_knn)
-        mlflow.log_metric("KNN Precision", np.mean(precision_values_knn))
-        mlflow.log_metric("KNN Recall", np.mean(recall_values_knn))
-        mlflow.log_metric("KNN F1 Score", np.mean(f1_score_values_knn))
-        if y_validacao_bin_knn.shape == result_bin_knn.shape:
-            mlflow.log_metric("KNN ROC AUC", roc_auc_knn)
+            metrics_dict["precision"].append(np.mean(precision_values))
+            metrics_dict["recall"].append(np.mean(recall_values))
+            metrics_dict["f1_score"].append(np.mean(f1_score_values))
 
-        # SVC
-        result_svc = svc.predict(X_validacao)
-        acc_svc = accuracy_score(y_validacao, result_svc)
-        accuracies_svc.append(acc_svc)
-        report_svc = classification_report(y_validacao, result_svc, output_dict=True, zero_division=0)
+            if y_validacao_bin.shape == result_bin.shape:
+                roc_auc = roc_auc_score(y_validacao_bin, result_bin, average="macro")
+                metrics_dict["roc_auc"].append(roc_auc)
+                mlflow.log_metric(f"{model_name} ROC AUC", roc_auc)
 
-        precision_values_svc = [report_svc[str(label)]['precision'] for label in np.unique(y) if str(label) in report_svc]
-        precisions_svc.append(np.mean(np.array(precision_values_svc)))
-        recall_values_svc = [report_svc[str(label)]['recall'] for label in np.unique(y) if str(label) in report_svc]
-        recalls_svc.append(np.mean(np.array(recall_values_svc)))
-        f1_score_values_svc = [report_svc[str(label)]['f1-score'] for label in np.unique(y) if str(label) in report_svc]
-        f1_scores_svc.append(np.mean(np.array(f1_score_values_svc)))
-        y_validacao_bin_svc = label_binarize(y_validacao, classes=np.unique(y))
-        result_bin_svc = label_binarize(result_svc, classes=np.unique(y))
-        if y_validacao_bin_svc.shape == result_bin_svc.shape:
-            roc_auc_svc = roc_auc_score(y_validacao_bin_svc, result_bin_svc, average="macro")
-            roc_aucs_svc.append(roc_auc_svc)
+            mlflow.log_metric(f"{model_name} Accuracy", acc)
+            mlflow.log_metric(f"{model_name} Precision", np.mean(precision_values))
+            mlflow.log_metric(f"{model_name} Recall", np.mean(recall_values))
+            mlflow.log_metric(f"{model_name} F1 Score", np.mean(f1_score_values))
 
-        # Log metrics for SVC
-        mlflow.log_metric("SVC Accuracy", acc_svc)
-        mlflow.log_metric("SVC Precision", np.mean(precision_values_svc))
-        mlflow.log_metric("SVC Recall", np.mean(recall_values_svc))
-        mlflow.log_metric("SVC F1 Score", np.mean(f1_score_values_svc))
-        if y_validacao_bin_svc.shape == result_bin_svc.shape:
-            mlflow.log_metric("SVC ROC AUC", roc_auc_svc)
+            mlflow.log_params({f"{model_name} Parameters": model.get_params()})
 
-        # RandomForest
-        result_rf = rf.predict(X_validacao)
-        acc_rf = accuracy_score(y_validacao, result_rf)
-        accuracies_rf.append(acc_rf)
-        report_rf = classification_report(y_validacao, result_rf, output_dict=True, zero_division=0)
-
-        precision_values_rf = [report_rf[str(label)]['precision'] for label in np.unique(y) if str(label) in report_rf]
-        precisions_rf.append(np.mean(np.array(precision_values_rf)))
-        recall_values_rf = [report_rf[str(label)]['recall'] for label in np.unique(y) if str(label) in report_rf]
-        recalls_rf.append(np.mean(np.array(recall_values_rf)))
-        f1_score_values_rf = [report_rf[str(label)]['f1-score'] for label in np.unique(y) if str(label) in report_rf]
-        f1_scores_rf.append(np.mean(np.array(f1_score_values_rf)))
-        y_validacao_bin_rf = label_binarize(y_validacao, classes=np.unique(y))
-        result_bin_rf = label_binarize(result_rf, classes=np.unique(y))
-        if y_validacao_bin_rf.shape == result_bin_rf.shape:
-            roc_auc_rf = roc_auc_score(y_validacao_bin_rf, result_bin_rf, average="macro")
-            roc_aucs_rf.append(roc_auc_rf)
-
-        # Log metrics for RandomForest
-        mlflow.log_metric("RF Accuracy", acc_rf)
-        mlflow.log_metric("RF Precision", np.mean(precision_values_rf))
-        mlflow.log_metric("RF Recall", np.mean(recall_values_rf))
-        mlflow.log_metric("RF F1 Score", np.mean(f1_score_values_rf))
-        if y_validacao_bin_rf.shape == result_bin_rf.shape:
-            mlflow.log_metric("RF ROC AUC", roc_auc_rf)
+        # Avaliar e logar métricas para KNN, SVC e RF
+        evaluate_and_log(knn, X_validacao, y_validacao, metrics_knn, "KNN")
+        evaluate_and_log(svc, X_validacao, y_validacao, metrics_svc, "SVC")
+        evaluate_and_log(rf, X_validacao, y_validacao, metrics_rf, "RF")
 
         # Log models
         mlflow.sklearn.log_model(knn, "knn_model")
         mlflow.sklearn.log_model(svc, "svc_model")
         mlflow.sklearn.log_model(rf, "rf_model")
+
+# Printar resultados médios das métricas
+def print_metrics(metrics_dict, model_name):
+    print(f"\nMétricas para {model_name}:")
+    print(f"Acurácia: {np.mean(metrics_dict['accuracy']) * 100:.2f}%")
+    print(f"Precisão: {np.mean(metrics_dict['precision']) * 100:.2f}%")
+    print(f"Recall: {np.mean(metrics_dict['recall']) * 100:.2f}%")
+    print(f"F1 Score: {np.mean(metrics_dict['f1_score']) * 100:.2f}%")
+    if metrics_dict["roc_auc"]:
+        print(f"ROC AUC: {np.mean(metrics_dict['roc_auc']) * 100:.2f}%")
+
+print_metrics(metrics_knn, "KNN")
+print_metrics(metrics_svc, "SVC")
+print_metrics(metrics_rf, "RF")
+
+with mlflow.start_run(run_name="Resultados gerais das métricas dos modelos de Machine Learning"):
+    mlflow.log_metric("KNN Mean Accuracy", np.mean(metrics_knn["accuracy"]) * 100)
+    mlflow.log_metric("KNN Mean Precision", np.mean(metrics_knn["precision"]) * 100)
+    mlflow.log_metric("KNN Mean Recall", np.mean(metrics_knn["recall"]) * 100)
+    mlflow.log_metric("KNN Mean F1 Score", np.mean(metrics_knn["f1_score"]) * 100)
+    if metrics_knn["roc_auc"]:
+        mlflow.log_metric("KNN Mean ROC AUC", np.mean(metrics_knn["roc_auc"]) * 100)
+
+    mlflow.log_metric("SVC Mean Accuracy", np.mean(metrics_svc["accuracy"]) * 100)
+    mlflow.log_metric("SVC Mean Precision", np.mean(metrics_svc["precision"]) * 100)
+    mlflow.log_metric("SVC Mean Recall", np.mean(metrics_svc["recall"]) * 100)
+    mlflow.log_metric("SVC Mean F1 Score", np.mean(metrics_svc["f1_score"]) * 100)
+    if metrics_svc["roc_auc"]:
+        mlflow.log_metric("SVC Mean ROC AUC", np.mean(metrics_svc["roc_auc"]) * 100)
+
+    mlflow.log_metric("RF Mean Accuracy", np.mean(metrics_rf["accuracy"]) * 100)
+    mlflow.log_metric("RF Mean Precision", np.mean(metrics_rf["precision"]) * 100)
+    mlflow.log_metric("RF Mean Recall", np.mean(metrics_rf["recall"]) * 100)
+    mlflow.log_metric("RF Mean F1 Score", np.mean(metrics_rf["f1_score"]) * 100)
+    if metrics_rf["roc_auc"]:
+        mlflow.log_metric("RF Mean ROC AUC", np.mean(metrics_rf["roc_auc"]) * 100)
+
+# Print and log dynamic selection results
+print("\n","Resultado das seleções dinâmicas:", "\n")
+print("KNORA-U: {:.2f}%".format(np.mean(resultKNU) * 100))
+print("KNORA-E: {:.2f}%".format(np.mean(resultKNE) * 100))
+print("LCA: {:.2f}%".format(np.mean(resultLCA) * 100))
+print("OLA: {:.2f}%".format(np.mean(resultOLA) * 100))
+print("MCB: {:.2f}%".format(np.mean(resultMCB) * 100))
+
+with mlflow.start_run(run_name="Resultado dos algoritimos de seleção dinâmica"):
+    mlflow.log_metric("KNORA-U", np.mean(resultKNU) * 100)
+    mlflow.log_metric("KNORA-E", np.mean(resultKNE) * 100)
+    mlflow.log_metric("LCA", np.mean(resultLCA) * 100)
+    mlflow.log_metric("OLA", np.mean(resultOLA) * 100)
+    mlflow.log_metric("MCB", np.mean(resultMCB) * 100)
